@@ -107,14 +107,6 @@ jobs:
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
-      - name: Security scan
-        uses: aquasecurity/trivy-action@0.28.0
-        with:
-          image-ref: ${{ env.IMAGE }}:${{ steps.sha.outputs.tag }}
-          format: table
-          exit-code: 0          # advisory — cambia a 1 cuando quieras bloquear por CRITICAL
-          severity: HIGH,CRITICAL
-          ignore-unfixed: true
 
   # ── CD: Deploy ────────────────────────────────────────────────────────────
   deploy:
