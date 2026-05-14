@@ -1,0 +1,14 @@
+export type { IUserRepository } from './user.repository';
+export { USER_REPOSITORY } from './user.repository';
+export type { ITestRepository } from './test.repository';
+export { TEST_REPOSITORY } from './test.repository';
+export type { ISessionRepository } from './session.repository';
+export { SESSION_REPOSITORY } from './session.repository';
+export type { IAnswerRepository } from './answer.repository';
+export { ANSWER_REPOSITORY } from './answer.repository';
+export type { IResultRepository } from './result.repository';
+export { RESULT_REPOSITORY } from './result.repository';
+export type { IProctoringAlertRepository } from './proctoring-alert.repository';
+export { PROCTORING_ALERT_REPOSITORY } from './proctoring-alert.repository';
+export type { IRecordingRepository } from './recording.repository';
+export { RECORDING_REPOSITORY } from './recording.repository';

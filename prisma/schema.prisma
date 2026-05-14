@@ -1,0 +1,641 @@
+generator client {
+  provider = "prisma-client-js"
+  output   = "../node_modules/.prisma/client"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+// ==========================================
+// ENUMS
+// ==========================================
+
+enum Role {
+  SUPER_ADMIN
+  ADMIN
+  EXAMINER
+  CANDIDATE
+  AUDITOR
+}
+
+enum TestType {
+  KOSTICK
+  VALANTI
+  DISC
+  PF16
+}
+
+enum QuestionFormat {
+  FORCED_CHOICE_PAIR    // Kostick: elige 1 de 2
+  FORCED_CHOICE_GROUP   // DISC: elige mas/menos de 4
+  MULTIPLE_CHOICE_ABC   // 16PF: A, B o C
+  PAIR_DISTRIBUTION     // Valanti: reparte 3 puntos entre A y B (3-0, 0-3, 2-1 o 1-2)
+}
+
+enum SessionStatus {
+  PENDING       // Creada pero no iniciada
+  IN_PROGRESS   // Candidato tomando el test
+  PAUSED        // Pausada por desconexion
+  COMPLETED     // Finalizada por el candidato
+  CANCELLED     // Cancelada por admin/examiner
+  EXPIRED       // Tiempo agotado
+  DISQUALIFIED  // Descalificado por cerrar navegador/examen
+}
+
+enum AlertType {
+  TAB_SWITCH          // Cambio de pestana
+  WINDOW_BLUR         // Salio de la ventana
+  FULLSCREEN_EXIT     // Salio de pantalla completa
+  FACE_NOT_DETECTED   // No se detecta rostro
+  MULTIPLE_FACES      // Mas de un rostro detectado
+  FACE_MISMATCH       // Rostro no coincide con registro
+  LIVENESS_FAILED     // Fallo deteccion de vida
+  COPY_PASTE_ATTEMPT  // Intento copiar/pegar
+  SECOND_SCREEN       // Monitor adicional detectado
+  CONNECTION_LOST     // Perdida de conexion
+  BROWSER_CLOSED      // Candidato cerro el navegador/examen
+}
+
+enum RecordingType {
+  WEBCAM
+  SCREEN
+}
+
+enum ScheduledExamStatus {
+  SCHEDULED   // Programado, aun no inicia
+  ACTIVE      // Ventana de ingreso abierta
+  IN_PROGRESS // Candidatos rindiendo
+  COMPLETED   // Todos terminaron
+  CANCELLED   // Cancelado por el examinador
+}
+
+enum CandidateAssignmentStatus {
+  ASSIGNED    // Asignado, no ha ingresado
+  STARTED     // Inicio el examen
+  COMPLETED   // Termino el examen
+  ABSENT      // No se presento
+}
+
+enum AiCalificacion {
+  NO_APTA
+  APTITUD_BAJA
+  APTITUD_MEDIA
+  APTITUD_ALTA
+  APTA
+}
+
+enum JobPostingStatus {
+  ACTIVE
+  CLOSED
+  ARCHIVED
+}
+
+enum JobApplicationStatus {
+  PENDING        // submitted, waiting AI eval
+  EVALUATED      // AI gave score
+  FILTERED_OUT   // failed filter questions
+  EMAIL_SENT     // credentials sent to candidate
+  CONVERTED      // candidate moved to psychometric pipeline
+}
+
+enum AcademicLevel {
+  BACHILLERATO
+  TECNICO
+  TECNOLOGICO
+  PREGRADO
+  POSTGRADO
+  MAESTRIA
+  DOCTORADO
+  OTRO
+}
+
+// ==========================================
+// USUARIOS
+// ==========================================
+
+model User {
+  id                String    @id @default(uuid())
+  email             String    @unique
+  password          String
+  cedula            String    @unique
+  firstName         String    @map("first_name")
+  lastName          String    @map("last_name")
+  role              Role      @default(CANDIDATE)
+  isActive          Boolean   @default(true) @map("is_active")
+  mustChangePassword Boolean  @default(false) @map("must_change_password")
+  profilePhotoUrl   String?   @map("profile_photo_url")
+  faceDescriptor    Float[]   @map("face_descriptor") // Vector 128-dim para face-api.js
+  refreshToken      String?   @map("refresh_token")
+  lastLoginAt       DateTime? @map("last_login_at")
+  createdAt         DateTime  @default(now()) @map("created_at")
+  updatedAt         DateTime  @updatedAt @map("updated_at")
+
+  // Relaciones
+  candidateSessions ExamSession[] @relation("CandidateSessions")
+  examinerSessions  ExamSession[] @relation("ExaminerSessions")
+  createdTests      Test[]        @relation("TestCreator")
+  auditLogs         AuditLog[]
+  scheduledExams    ScheduledExam[]       @relation("ScheduledExamCreator")
+  examAssignments   ScheduledExamCandidate[]
+  aiRecommendations AiRecommendation[]
+  createdJobPostings JobPosting[]         @relation("JobPostingCreator")
+
+  @@index([role])
+  @@index([isActive])
+  @@index([role, isActive])
+  @@map("users")
+}
+
+// ==========================================
+// TESTS PSICOMETRICOS
+// ==========================================
+
+model Test {
+  id              String         @id @default(uuid())
+  name            String         // "Kostick PAPI", "DISC", "16PF Forma A", "Valanti"
+  description     String?
+  type            TestType
+  questionFormat  QuestionFormat @map("question_format")
+  timeLimitMin    Int            @map("time_limit_min") // Tiempo limite en minutos
+  isActive        Boolean        @default(true) @map("is_active")
+  instructions    String?        // Instrucciones que ve el candidato antes de empezar
+  totalQuestions  Int            @map("total_questions")
+  createdById     String         @map("created_by_id")
+  createdAt       DateTime       @default(now()) @map("created_at")
+  updatedAt       DateTime       @updatedAt @map("updated_at")
+
+  // Relaciones
+  createdBy       User           @relation("TestCreator", fields: [createdById], references: [id])
+  questions       Question[]
+  scales          Scale[]
+  sessions        ExamSession[]
+  scheduledExams  ScheduledExam[]
+
+  @@map("tests")
+}
+
+// ==========================================
+// ESCALAS DE MEDICION
+// ==========================================
+// Cada test tiene sus propias escalas:
+// - Kostick: 20 escalas (G, A, N, L, P, I, T, V, S, B, O, X, C, D, Z, E, K, F, W, R)
+// - Valanti: 6 dimensiones (Teorico, Economico, Estetico, Social, Politico, Religioso)
+// - DISC: 4 dimensiones (D, I, S, C)
+// - 16PF: 16 factores primarios (A-Q4) + 5 globales
+
+model Scale {
+  id          String  @id @default(uuid())
+  testId      String  @map("test_id")
+  code        String  // "D", "I", "S", "C", "A", "B", "G", etc.
+  name        String  // "Dominancia", "Influencia", "Afabilidad", etc.
+  description String?
+  minScore    Float   @default(0) @map("min_score")
+  maxScore    Float   @map("max_score")
+  order       Int     @default(0) // Orden de presentacion en reportes
+
+  // Relaciones
+  test        Test    @relation(fields: [testId], references: [id], onDelete: Cascade)
+  results     ScaleResult[]
+
+  @@unique([testId, code])
+  @@map("scales")
+}
+
+// ==========================================
+// PREGUNTAS
+// ==========================================
+
+model Question {
+  id        String @id @default(uuid())
+  testId    String @map("test_id")
+  number    Int    // Numero de pregunta (1, 2, 3...)
+  text      String? // Texto de la pregunta (si aplica)
+
+  // Para FORCED_CHOICE_PAIR (Kostick/Valanti): optionA y optionB
+  // Para FORCED_CHOICE_GROUP (DISC): options es un array JSON de 4 adjetivos
+  // Para MULTIPLE_CHOICE_ABC (16PF): optionA, optionB, optionC
+  optionA   String? @map("option_a")
+  optionB   String? @map("option_b")
+  optionC   String? @map("option_c") // Solo 16PF
+
+  // JSON flexible para opciones complejas (DISC: 4 adjetivos con sus escalas)
+  options   Json?
+
+  // Mapeo de scoring: que escala suma cada opcion
+  // Ej Kostick: {"A": "G", "B": "N"} -> si elige A suma a escala G
+  // Ej DISC: {"most": {"1": "D", "2": "I"}, "least": {"3": "S", "4": "C"}}
+  // Ej 16PF: {"A": {"factor": "A", "score": 2}, "B": {"factor": "A", "score": 1}, "C": {"factor": "A", "score": 0}}
+  scoring   Json
+
+  // Relaciones
+  test      Test     @relation(fields: [testId], references: [id], onDelete: Cascade)
+  answers   Answer[]
+
+  @@unique([testId, number])
+  @@map("questions")
+}
+
+// ==========================================
+// SESIONES DE EXAMEN
+// ==========================================
+
+model ExamSession {
+  id              String        @id @default(uuid())
+  testId          String        @map("test_id")
+  candidateId     String        @map("candidate_id")
+  examinerId      String?       @map("examiner_id")
+  scheduledExamId String?       @map("scheduled_exam_id") // Enlace a la bateria programada
+  status          SessionStatus @default(PENDING)
+  startedAt       DateTime?     @map("started_at")
+  finishedAt      DateTime?     @map("finished_at")
+  timeSpentSec    Int?          @map("time_spent_sec") // Tiempo real usado
+  ipAddress       String?       @map("ip_address")
+  userAgent       String?       @map("user_agent")
+  currentQuestion Int           @default(0) @map("current_question") // Para reconexion
+  createdAt       DateTime      @default(now()) @map("created_at")
+  updatedAt       DateTime      @updatedAt @map("updated_at")
+
+  // Relaciones
+  test            Test              @relation(fields: [testId], references: [id])
+  candidate       User              @relation("CandidateSessions", fields: [candidateId], references: [id])
+  examiner        User?             @relation("ExaminerSessions", fields: [examinerId], references: [id])
+  scheduledExam   ScheduledExam?    @relation(fields: [scheduledExamId], references: [id])
+  answers         Answer[]
+  result          Result?
+  alerts          ProctoringAlert[]
+  biometricChecks BiometricCheck[]
+  recordings      Recording[]
+
+  @@index([candidateId])
+  @@index([examinerId])
+  @@index([status])
+  @@index([candidateId, status])
+  @@index([scheduledExamId])
+  @@index([createdAt])
+  @@map("exam_sessions")
+}
+
+// ==========================================
+// RESPUESTAS
+// ==========================================
+
+model Answer {
+  id              String   @id @default(uuid())
+  sessionId       String   @map("session_id")
+  questionId      String   @map("question_id")
+  questionNumber  Int      @map("question_number")
+
+  // La respuesta varia segun el test:
+  // Kostick/Valanti: "A" o "B"
+  // DISC: {"most": "2", "least": "4"} (indices del adjetivo)
+  // 16PF: "A", "B" o "C"
+  response        Json
+
+  responseTimeMs  Int      @map("response_time_ms") // Milisegundos en responder
+  answeredAt      DateTime @default(now()) @map("answered_at")
+
+  // Relaciones
+  session         ExamSession @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+  question        Question    @relation(fields: [questionId], references: [id])
+
+  @@unique([sessionId, questionId])
+  @@index([sessionId])
+  @@index([questionId])
+  @@map("answers")
+}
+
+// ==========================================
+// RESULTADOS
+// ==========================================
+
+model Result {
+  id              String        @id @default(uuid())
+  sessionId       String        @unique @map("session_id")
+  totalScore      Float?        @map("total_score")
+  interpretation  String?       // Interpretacion general generada
+  rawData         Json?         @map("raw_data")  // Datos crudos del scoring
+  calculatedAt    DateTime      @default(now()) @map("calculated_at")
+
+  // Relaciones
+  session         ExamSession   @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+  scaleResults    ScaleResult[]
+
+  @@map("results")
+}
+
+// Resultado por cada escala del test
+model ScaleResult {
+  id          String @id @default(uuid())
+  resultId    String @map("result_id")
+  scaleId     String @map("scale_id")
+  rawScore    Float  @map("raw_score")       // Puntaje bruto
+  percentile  Float? @map("percentile")       // Percentil (0-100)
+  stenScore   Float? @map("sten_score")       // Puntuacion sten (1-10) para 16PF
+  category    String? // "Alto", "Medio", "Bajo" o categorias especificas
+
+  // Relaciones
+  result      Result @relation(fields: [resultId], references: [id], onDelete: Cascade)
+  scale       Scale  @relation(fields: [scaleId], references: [id])
+
+  @@unique([resultId, scaleId])
+  @@index([resultId])
+  @@index([scaleId])
+  @@map("scale_results")
+}
+
+// ==========================================
+// PROCTORING (ANTI-FRAUDE)
+// ==========================================
+
+model ProctoringAlert {
+  id          String    @id @default(uuid())
+  sessionId   String    @map("session_id")
+  type        AlertType
+  data        Json?     // Datos adicionales del evento
+  screenshotUrl String? @map("screenshot_url")
+  createdAt   DateTime  @default(now()) @map("created_at")
+
+  // Relaciones
+  session     ExamSession @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+
+  @@index([sessionId])
+  @@index([type])
+  @@map("proctoring_alerts")
+}
+
+model BiometricCheck {
+  id              String   @id @default(uuid())
+  sessionId       String   @map("session_id")
+  matchScore      Float    @map("match_score")    // 0.0 - 1.0 similitud facial
+  livenessPassed  Boolean  @map("liveness_passed")
+  screenshotUrl   String?  @map("screenshot_url")
+  createdAt       DateTime @default(now()) @map("created_at")
+
+  // Relaciones
+  session         ExamSession @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+
+  @@index([sessionId])
+  @@map("biometric_checks")
+}
+
+model Recording {
+  id          String        @id @default(uuid())
+  sessionId   String        @map("session_id")
+  type        RecordingType
+  url         String
+  durationSec Int?          @map("duration_sec")
+  sizeBytes   BigInt?       @map("size_bytes")
+  createdAt   DateTime      @default(now()) @map("created_at")
+
+  // Relaciones
+  session     ExamSession   @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+
+  @@index([sessionId])
+  @@map("recordings")
+}
+
+// ==========================================
+// EXAMENES PROGRAMADOS
+// ==========================================
+
+model ScheduledExam {
+  id              String               @id @default(uuid())
+  testId          String?              @map("test_id")           // null = bateria completa (4 tests)
+  createdById     String               @map("created_by_id")
+  title           String               // "Evaluacion Psicometrica - Grupo A"
+  description     String?
+  scheduledAt     DateTime             @map("scheduled_at")     // Hora de inicio (candidatos pueden entrar desde aqui)
+  durationMin     Int                  @default(120) @map("duration_min")  // Duracion total: 120 min para bateria
+  status            ScheduledExamStatus  @default(SCHEDULED)
+  testTypes         String[]             @default([]) @map("test_types")  // [] = all 4 (legacy/battery), else subset
+  aiRegeneratedAt   DateTime?            @map("ai_regenerated_at")
+  aiRegeneratedById String?              @map("ai_regenerated_by_id")
+  createdAt         DateTime             @default(now()) @map("created_at")
+  updatedAt         DateTime             @updatedAt @map("updated_at")
+
+  // Relaciones
+  test              Test?                @relation(fields: [testId], references: [id])
+  createdBy         User                 @relation("ScheduledExamCreator", fields: [createdById], references: [id])
+  candidates      ScheduledExamCandidate[]
+  sessions        ExamSession[]
+  aiRecommendations AiRecommendation[]
+
+  @@index([status])
+  @@index([createdById])
+  @@index([scheduledAt])
+  @@index([status, scheduledAt])
+  @@map("scheduled_exams")
+}
+
+model ScheduledExamCandidate {
+  id               String                    @id @default(uuid())
+  scheduledExamId  String                    @map("scheduled_exam_id")
+  candidateId      String                    @map("candidate_id")
+  status           CandidateAssignmentStatus @default(ASSIGNED)
+  startedAt        DateTime?                 @map("started_at")
+  finishedAt       DateTime?                 @map("finished_at")
+  sessionId        String?                   @map("session_id")  // Referencia a la ExamSession creada
+
+  // Relaciones
+  scheduledExam    ScheduledExam             @relation(fields: [scheduledExamId], references: [id], onDelete: Cascade)
+  candidate        User                      @relation(fields: [candidateId], references: [id])
+
+  @@unique([scheduledExamId, candidateId])
+  @@index([candidateId])
+  @@index([candidateId, status])
+  @@map("scheduled_exam_candidates")
+}
+
+// ==========================================
+// RECOMENDACION IA (BATERIA COMPLETA)
+// ==========================================
+
+model AiRecommendation {
+  id              String          @id @default(uuid())
+  candidateId     String          @map("candidate_id")
+  scheduledExamId String?         @map("scheduled_exam_id")
+  calificacion    AiCalificacion
+  resumen         String          @db.Text
+  fortalezas      String[]
+  riesgos         String[]
+  observaciones   String[]
+  // IAP cuantitativo (Indice de Adecuacion al Puesto, 0-100)
+  iapScore            Int?         @map("iap_score")
+  iapBreakdown        Json?        @map("iap_breakdown")  // { pf16, disc, valanti, kostick }
+  dictamen            String?      // APTO_EXCELENTE | APTO_CON_RESERVAS | NO_APTO_DESARROLLABLE | NO_APTO_RIESGO | PRUEBA_INVALIDADA
+  invalidated         Boolean      @default(false)
+  invalidationReasons String[]     @default([]) @map("invalidation_reasons")
+  rawPrompt       String?         @map("raw_prompt") @db.Text
+  rawResponse     String?         @map("raw_response") @db.Text
+  model           String          // deepseek-chat
+  createdAt       DateTime        @default(now()) @map("created_at")
+
+  // Relaciones
+  candidate       User            @relation(fields: [candidateId], references: [id])
+  scheduledExam   ScheduledExam?  @relation(fields: [scheduledExamId], references: [id])
+
+  @@unique([candidateId, scheduledExamId])
+  @@index([candidateId])
+  @@index([scheduledExamId])
+  @@index([iapScore])
+  @@map("ai_recommendations")
+}
+
+// ==========================================
+// AUDITORIA
+// ==========================================
+
+model AuditLog {
+  id        String   @id @default(uuid())
+  userId    String?  @map("user_id")
+  action    String   // "LOGIN", "CREATE_TEST", "START_EXAM", "SUBMIT_ANSWER", etc.
+  resource  String   // "User", "Test", "ExamSession", etc.
+  resourceId String? @map("resource_id")
+  data      Json?    // Datos relevantes del cambio
+  ipAddress String?  @map("ip_address")
+  createdAt DateTime @default(now()) @map("created_at")
+
+  // Relaciones
+  user      User?    @relation(fields: [userId], references: [id])
+
+  @@index([userId])
+  @@index([action])
+  @@index([createdAt])
+  @@map("audit_logs")
+}
+
+// ==========================================
+// ATS - APPLICANT TRACKING SYSTEM
+// ==========================================
+// Convocatorias publicas para reclutamiento.
+// Solo ADMIN/SUPER_ADMIN crean convocatorias; el formulario de
+// postulacion es publico (link con slug).
+// La IA evalua el CV contra el perfil del puesto.
+
+model JobPosting {
+  id                  String           @id @default(uuid())
+  slug                String           @unique  // link publico /apply/{slug}
+  title               String           // Nombre del puesto
+  description         String?          @db.Text
+  jobProfileUrl       String           @map("job_profile_url")   // PDF perfil en MinIO
+  jobProfileText      String?          @map("job_profile_text") @db.Text  // texto extraido (cache)
+  topCandidatesCount  Int              @map("top_candidates_count")  // N a pasar a psicometricos
+  responsibleEmail    String           @map("responsible_email")     // notificaciones
+  status              JobPostingStatus @default(ACTIVE)
+  createdById         String           @map("created_by_id")
+  createdAt           DateTime         @default(now()) @map("created_at")
+  updatedAt           DateTime         @updatedAt @map("updated_at")
+
+  createdBy           User             @relation("JobPostingCreator", fields: [createdById], references: [id])
+  questions           JobPostingQuestion[]
+  applications        JobApplication[]
+
+  @@index([slug])
+  @@index([status])
+  @@index([createdById])
+  @@map("job_postings")
+}
+
+model JobPostingQuestion {
+  id              String   @id @default(uuid())
+  jobPostingId    String   @map("job_posting_id")
+  order           Int      // 1 o 2
+  questionText    String   @map("question_text") @db.Text
+  options         String[] // opciones disponibles
+  correctOption   String   @map("correct_option") // opcion que admite
+
+  jobPosting      JobPosting               @relation(fields: [jobPostingId], references: [id], onDelete: Cascade)
+  answers         JobApplicationAnswer[]
+
+  @@unique([jobPostingId, order])
+  @@map("job_posting_questions")
+}
+
+model JobApplication {
+  id                  String   @id @default(uuid())
+  jobPostingId        String   @map("job_posting_id")
+
+  // Datos personales
+  firstName           String   @map("first_name")
+  lastName            String   @map("last_name")
+  cedula              String
+  birthDate           DateTime @map("birth_date") @db.Date
+  residenceCity       String   @map("residence_city")
+  residenceProvince   String   @map("residence_province")
+  email               String
+
+  // CV
+  cvUrl               String   @map("cv_url")             // MinIO path
+  cvText              String?  @map("cv_text") @db.Text   // texto extraido del CV
+
+  // Evaluacion IA (1-100)
+  aiScore             Int?     @map("ai_score")
+  aiJustification     String?  @map("ai_justification") @db.Text
+  aiEvaluatedAt       DateTime? @map("ai_evaluated_at")
+  aiError             String?  @map("ai_error") @db.Text  // si falla la IA
+
+  status              JobApplicationStatus @default(PENDING)
+  filteredOutReason   String?  @map("filtered_out_reason")  // razon si fue descartado
+
+  emailSentAt         DateTime? @map("email_sent_at")
+  convertedUserId     String?   @map("converted_user_id")   // User CANDIDATE creado al enviar correo
+
+  ipAddress           String?  @map("ip_address")
+  fingerprint         String?  // hash navegador para anti-resubmit
+  createdAt           DateTime @default(now()) @map("created_at")
+  updatedAt           DateTime @updatedAt @map("updated_at")
+
+  jobPosting          JobPosting @relation(fields: [jobPostingId], references: [id], onDelete: Cascade)
+  academicTitles      JobApplicationAcademic[]
+  experiences         JobApplicationExperience[]
+  answers             JobApplicationAnswer[]
+
+  @@unique([jobPostingId, cedula])
+  @@index([jobPostingId, status])
+  @@index([jobPostingId, aiScore])
+  @@index([createdAt])
+  @@map("job_applications")
+}
+
+model JobApplicationAcademic {
+  id             String   @id @default(uuid())
+  applicationId  String   @map("application_id")
+  title          String              // ej: "Ingeniero Industrial"
+  institution    String?
+  year           Int?
+  level          AcademicLevel @default(OTRO)
+
+  application    JobApplication @relation(fields: [applicationId], references: [id], onDelete: Cascade)
+
+  @@index([applicationId])
+  @@map("job_application_academics")
+}
+
+model JobApplicationExperience {
+  id             String   @id @default(uuid())
+  applicationId  String   @map("application_id")
+  company        String
+  position       String
+  durationMonths Int      @map("duration_months")
+  description    String?
+
+  application    JobApplication @relation(fields: [applicationId], references: [id], onDelete: Cascade)
+
+  @@index([applicationId])
+  @@map("job_application_experiences")
+}
+
+model JobApplicationAnswer {
+  id              String   @id @default(uuid())
+  applicationId   String   @map("application_id")
+  questionId      String   @map("question_id")
+  selectedOption  String   @map("selected_option")
+  isCorrect       Boolean  @map("is_correct")
+
+  application     JobApplication     @relation(fields: [applicationId], references: [id], onDelete: Cascade)
+  question        JobPostingQuestion @relation(fields: [questionId], references: [id], onDelete: Cascade)
+
+  @@unique([applicationId, questionId])
+  @@map("job_application_answers")
+}

@@ -1,0 +1,152 @@
+name: API — CI/CD
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'src/**'
+      - 'prisma/**'
+      - 'package*.json'
+      - 'Dockerfile'
+      - '.github/workflows/ci-cd.yml'
+  pull_request:
+    branches: [main]
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE: ghcr.io/kennethtaipe06/app-api
+
+jobs:
+  # ── CI ────────────────────────────────────────────────────────────────────
+  lint-and-test:
+    name: Lint & Test
+    runs-on: ubuntu-latest
+
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: test
+          POSTGRES_PASSWORD: test
+          POSTGRES_DB: mindtalent_test
+        ports: [5432:5432]
+        options: >-
+          --health-cmd "pg_isready -U test -d mindtalent_test"
+          --health-interval 10s --health-timeout 5s --health-retries 5
+      redis:
+        image: redis:7-alpine
+        ports: [6379:6379]
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 10s --health-timeout 5s --health-retries 5
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - run: npm ci
+
+      - name: Generate Prisma Client
+        run: npx prisma generate
+        env:
+          DATABASE_URL: postgresql://test:test@localhost:5432/mindtalent_test
+
+      - run: npm run lint
+
+      - name: Test (E2E)
+        run: npm run test:e2e
+        env:
+          DATABASE_URL: postgresql://test:test@localhost:5432/mindtalent_test
+          REDIS_HOST: localhost
+          REDIS_PORT: 6379
+          REDIS_PASSWORD: ""
+          JWT_SECRET: ci-test-secret
+          JWT_EXPIRES_IN: 15m
+          JWT_REFRESH_SECRET: ci-test-refresh-secret
+          JWT_REFRESH_EXPIRES_IN: 7d
+          BCRYPT_SALT_ROUNDS: 4
+
+  # ── CD: Build & Push ──────────────────────────────────────────────────────
+  build-and-push:
+    name: Build & Push
+    runs-on: ubuntu-latest
+    needs: lint-and-test
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    permissions:
+      contents: read
+      packages: write
+    outputs:
+      sha_tag: ${{ steps.sha.outputs.tag }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Short SHA
+        id: sha
+        run: echo "tag=${GITHUB_SHA::7}" >> $GITHUB_OUTPUT
+
+      - uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.PAT_TOKEN }}
+
+      - uses: docker/setup-buildx-action@v3
+
+      - uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: true
+          tags: |
+            ${{ env.IMAGE }}:${{ steps.sha.outputs.tag }}
+            ${{ env.IMAGE }}:latest
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Security scan
+        uses: aquasecurity/trivy-action@0.28.0
+        with:
+          image-ref: ${{ env.IMAGE }}:${{ steps.sha.outputs.tag }}
+          format: table
+          exit-code: 0          # advisory — cambia a 1 cuando quieras bloquear por CRITICAL
+          severity: HIGH,CRITICAL
+          ignore-unfixed: true
+
+  # ── CD: Deploy ────────────────────────────────────────────────────────────
+  deploy:
+    name: Deploy to production
+    runs-on: ubuntu-latest
+    needs: build-and-push
+    environment: production
+
+    steps:
+      - name: Deploy via SSH
+        uses: appleboy/ssh-action@v1.0.3
+        env:
+          SHA_TAG: ${{ needs.build-and-push.outputs.sha_tag }}
+        with:
+          host: ${{ secrets.VPS_HOST }}
+          username: ${{ secrets.VPS_USER }}
+          key: ${{ secrets.VPS_SSH_KEY }}
+          envs: SHA_TAG
+          script: |
+            set -euo pipefail
+            IMAGE="ghcr.io/kennethtaipe06/app-api:${SHA_TAG}"
+            MANIFESTS=~/mindtalent-k8s
+
+            echo "==> Migración DB [ ${IMAGE} ]"
+            kubectl -n mindtalent delete job mindtalent-migrate --ignore-not-found
+            sed "s|image: ghcr.io/kennethtaipe06/app-api:latest|image: ${IMAGE}|g" \
+              ${MANIFESTS}/20-migrate-job.yaml | kubectl apply -f -
+            kubectl -n mindtalent wait --for=condition=complete \
+              job/mindtalent-migrate --timeout=300s
+
+            echo "==> Rolling update API [ ${IMAGE} ]"
+            kubectl -n mindtalent set image deployment/mindtalent-api api=${IMAGE}
+            kubectl -n mindtalent rollout status deployment/mindtalent-api --timeout=300s
+
+            echo "==> Deploy OK — $(date -u '+%Y-%m-%d %H:%M:%S UTC')"

@@ -1,0 +1,5 @@
+-- AlterEnum
+ALTER TYPE "SessionStatus" ADD VALUE 'DISQUALIFIED';
+
+-- AlterEnum
+ALTER TYPE "AlertType" ADD VALUE 'BROWSER_CLOSED';
