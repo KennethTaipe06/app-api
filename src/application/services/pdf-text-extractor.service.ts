@@ -11,9 +11,8 @@ export class PdfTextExtractorService {
    */
   async extractText(buffer: Buffer): Promise<string | null> {
     try {
-      // Carga dinamica para evitar problemas de bundling y arranque
-      const pdfParseModule: any = await import('pdf-parse');
-      const pdfParse = pdfParseModule.default || pdfParseModule;
+      // eslint-disable-next-line @typescript-eslint/no-require-imports
+      const pdfParse = require('pdf-parse');
       const data = await pdfParse(buffer);
       const raw = (data?.text || '').replace(/\s+/g, ' ').trim();
       if (!raw) return null;
