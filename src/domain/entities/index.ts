@@ -7,3 +7,10 @@ export { AnswerEntity } from './answer.entity';
 export { ResultEntity, ScaleResultEntity } from './result.entity';
 export { ProctoringAlertEntity } from './proctoring-alert.entity';
 export { RecordingEntity } from './recording.entity';
+export { CustomExamEntity } from './custom-exam.entity';
+export {
+  CustomQuestionEntity,
+  CustomQuestionOptionEntity,
+} from './custom-question.entity';
+export { CustomExamSessionEntity } from './custom-exam-session.entity';
+export { CustomAnswerEntity } from './custom-answer.entity';

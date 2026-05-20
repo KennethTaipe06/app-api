@@ -12,7 +12,8 @@ export class PrismaProctoringAlertRepository implements IProctoringAlertReposito
   ): Promise<ProctoringAlertEntity> {
     const alert = await this.prisma.proctoringAlert.create({
       data: {
-        sessionId: data.sessionId!,
+        sessionId: data.sessionId ?? null,
+        customSessionId: data.customSessionId ?? null,
         type: data.type as any,
         data: (data.data || {}) as any,
         screenshotUrl: data.screenshotUrl || null,

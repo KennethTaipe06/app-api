@@ -16,6 +16,10 @@ import {
   PrismaResultRepository,
   PrismaProctoringAlertRepository,
   PrismaRecordingRepository,
+  PrismaCustomQuestionRepository,
+  PrismaCustomExamRepository,
+  PrismaCustomExamSessionRepository,
+  PrismaCustomAnswerRepository,
 } from './infrastructure/persistence/prisma/repositories';
 import { JwtStrategy } from './infrastructure/config/jwt.strategy';
 import { MinioStorageService } from './infrastructure/services/minio-storage.service';
@@ -34,6 +38,10 @@ import {
   RESULT_REPOSITORY,
   PROCTORING_ALERT_REPOSITORY,
   RECORDING_REPOSITORY,
+  CUSTOM_QUESTION_REPOSITORY,
+  CUSTOM_EXAM_REPOSITORY,
+  CUSTOM_EXAM_SESSION_REPOSITORY,
+  CUSTOM_ANSWER_REPOSITORY,
 } from './domain/repositories';
 import { STORAGE_SERVICE } from './application/ports/storage.port';
 import { CACHE_SERVICE } from './application/ports/cache.port';
@@ -58,6 +66,17 @@ import {
 } from './application/use-cases/tests';
 import { UpdateUserUseCase } from './application/use-cases/users';
 import { CreateAlertUseCase } from './application/use-cases/proctoring';
+import {
+  CreateCustomQuestionUseCase,
+  UpdateCustomQuestionUseCase,
+  CreateCustomExamUseCase,
+  UpdateCustomExamUseCase,
+  AssignCandidatesUseCase,
+  StartCustomExamUseCase,
+  GetCurrentQuestionUseCase,
+  SubmitCustomAnswerUseCase,
+  FinishCustomExamUseCase,
+} from './application/use-cases/custom-exams';
 
 // Presentation
 import { ProctoringController } from './presentation/controllers/proctoring.controller';
@@ -84,6 +103,9 @@ import { AuthController } from './presentation/controllers/auth.controller';
 import { UsersController } from './presentation/controllers/users.controller';
 import { TestsController } from './presentation/controllers/tests.controller';
 import { SessionsController } from './presentation/controllers/sessions.controller';
+import { CustomQuestionsController } from './presentation/controllers/custom-questions.controller';
+import { CustomExamsController } from './presentation/controllers/custom-exams.controller';
+import { CustomSessionsController } from './presentation/controllers/custom-sessions.controller';
 import { JwtAuthGuard } from './presentation/guards/jwt.guard';
 import { RolesGuard } from './presentation/guards/roles.guard';
 
@@ -119,6 +141,9 @@ import { RolesGuard } from './presentation/guards/roles.guard';
     HealthController,
     JobPostingsController,
     ApplicationsController,
+    CustomQuestionsController,
+    CustomExamsController,
+    CustomSessionsController,
   ],
   providers: [
     // Infrastructure
@@ -136,6 +161,19 @@ import { RolesGuard } from './presentation/guards/roles.guard';
       useClass: PrismaProctoringAlertRepository,
     },
     { provide: RECORDING_REPOSITORY, useClass: PrismaRecordingRepository },
+    {
+      provide: CUSTOM_QUESTION_REPOSITORY,
+      useClass: PrismaCustomQuestionRepository,
+    },
+    { provide: CUSTOM_EXAM_REPOSITORY, useClass: PrismaCustomExamRepository },
+    {
+      provide: CUSTOM_EXAM_SESSION_REPOSITORY,
+      useClass: PrismaCustomExamSessionRepository,
+    },
+    {
+      provide: CUSTOM_ANSWER_REPOSITORY,
+      useClass: PrismaCustomAnswerRepository,
+    },
     { provide: STORAGE_SERVICE, useClass: MinioStorageService },
     { provide: CACHE_SERVICE, useClass: RedisCacheService },
     { provide: EMAIL_SERVICE, useClass: EmailService },
@@ -154,6 +192,15 @@ import { RolesGuard } from './presentation/guards/roles.guard';
     UpdateTestUseCase,
     UpdateUserUseCase,
     CreateAlertUseCase,
+    CreateCustomQuestionUseCase,
+    UpdateCustomQuestionUseCase,
+    CreateCustomExamUseCase,
+    UpdateCustomExamUseCase,
+    AssignCandidatesUseCase,
+    StartCustomExamUseCase,
+    GetCurrentQuestionUseCase,
+    SubmitCustomAnswerUseCase,
+    FinishCustomExamUseCase,
 
     // Services
     MetricsService,

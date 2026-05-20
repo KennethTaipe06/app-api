@@ -111,6 +111,27 @@ enum AcademicLevel {
 }
 
 // ==========================================
+// CUSTOM EXAMS (EXAMENES PERSONALIZADOS)
+// ==========================================
+// Modulo separado de tests psicometricos. El examiner crea su propio
+// banco de preguntas y arma examenes reutilizando preguntas.
+
+enum CustomQuestionType {
+  MULTIPLE_CHOICE_SINGLE  // Opcion multiple con UNA respuesta correcta
+  MULTIPLE_CHOICE_MULTI   // Opcion multiple con VARIAS respuestas correctas (todas deben acertarse)
+  TRUE_FALSE              // Verdadero/Falso
+}
+
+enum CustomSessionStatus {
+  PENDING       // Asignada, no iniciada
+  IN_PROGRESS   // Candidato rindiendo
+  COMPLETED     // Finalizada por candidato
+  EXPIRED       // Tiempo agotado
+  DISQUALIFIED  // Descalificado (proctoring)
+  CANCELLED     // Cancelado por examiner
+}
+
+// ==========================================
 // USUARIOS
 // ==========================================
 
@@ -140,6 +161,9 @@ model User {
   examAssignments   ScheduledExamCandidate[]
   aiRecommendations AiRecommendation[]
   createdJobPostings JobPosting[]         @relation("JobPostingCreator")
+  createdCustomExams CustomExam[]           @relation("CustomExamCreator")
+  customQuestions    CustomQuestion[]      @relation("CustomQuestionCreator")
+  customExamSessions CustomExamSession[]   @relation("CustomExamCandidate")
 
   @@index([role])
   @@index([isActive])
@@ -349,17 +373,20 @@ model ScaleResult {
 // ==========================================
 
 model ProctoringAlert {
-  id          String    @id @default(uuid())
-  sessionId   String    @map("session_id")
-  type        AlertType
-  data        Json?     // Datos adicionales del evento
-  screenshotUrl String? @map("screenshot_url")
-  createdAt   DateTime  @default(now()) @map("created_at")
+  id              String    @id @default(uuid())
+  sessionId       String?   @map("session_id")          // Sesion psicometrica (legacy)
+  customSessionId String?   @map("custom_session_id")   // Sesion de examen personalizado
+  type            AlertType
+  data            Json?     // Datos adicionales del evento
+  screenshotUrl   String?   @map("screenshot_url")
+  createdAt       DateTime  @default(now()) @map("created_at")
 
   // Relaciones
-  session     ExamSession @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+  session       ExamSession?       @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+  customSession CustomExamSession? @relation(fields: [customSessionId], references: [id], onDelete: Cascade)
 
   @@index([sessionId])
+  @@index([customSessionId])
   @@index([type])
   @@map("proctoring_alerts")
 }
@@ -638,4 +665,141 @@ model JobApplicationAnswer {
 
   @@unique([applicationId, questionId])
   @@map("job_application_answers")
+}
+
+// ==========================================
+// CUSTOM EXAM - MODELOS
+// ==========================================
+
+// Banco de preguntas reutilizables del examiner
+model CustomQuestion {
+  id          String              @id @default(uuid())
+  examinerId  String              @map("examiner_id")
+  statement   String              @db.Text
+  type        CustomQuestionType
+  points      Int                 @default(1)
+  explanation String?             @db.Text         // Opcional: explicacion para reportes (NUNCA enviada al candidato)
+  isActive    Boolean             @default(true) @map("is_active")
+  createdAt   DateTime            @default(now()) @map("created_at")
+  updatedAt   DateTime            @updatedAt @map("updated_at")
+
+  examiner    User                @relation("CustomQuestionCreator", fields: [examinerId], references: [id])
+  options     CustomQuestionOption[]
+  examLinks   CustomExamQuestion[]
+  answers     CustomAnswer[]
+
+  @@index([examinerId])
+  @@index([examinerId, isActive])
+  @@map("custom_questions")
+}
+
+model CustomQuestionOption {
+  id           String         @id @default(uuid())
+  questionId   String         @map("question_id")
+  text         String         @db.Text
+  isCorrect    Boolean        @default(false) @map("is_correct")
+  displayOrder Int            @map("display_order")
+
+  question     CustomQuestion @relation(fields: [questionId], references: [id], onDelete: Cascade)
+
+  @@index([questionId])
+  @@map("custom_question_options")
+}
+
+// Definicion del examen personalizado
+model CustomExam {
+  id             String   @id @default(uuid())
+  examinerId     String   @map("examiner_id")
+  title          String
+  description    String?  @db.Text
+  instructions   String?  @db.Text
+  durationMin    Int      @map("duration_min")     // Tiempo global en minutos
+  passingScore   Float?   @map("passing_score")    // % minimo para aprobar (opcional)
+  randomizeQuestions Boolean @default(true) @map("randomize_questions")
+  randomizeOptions   Boolean @default(true) @map("randomize_options")
+  isActive       Boolean  @default(true) @map("is_active")
+  createdAt      DateTime @default(now()) @map("created_at")
+  updatedAt      DateTime @updatedAt @map("updated_at")
+
+  examiner       User                @relation("CustomExamCreator", fields: [examinerId], references: [id])
+  examQuestions  CustomExamQuestion[]
+  sessions       CustomExamSession[]
+
+  @@index([examinerId])
+  @@index([examinerId, isActive])
+  @@map("custom_exams")
+}
+
+// Junction: que preguntas del banco usa cada examen y en que orden base
+model CustomExamQuestion {
+  id           String         @id @default(uuid())
+  examId       String         @map("exam_id")
+  questionId   String         @map("question_id")
+  displayOrder Int            @map("display_order")
+
+  exam         CustomExam     @relation(fields: [examId], references: [id], onDelete: Cascade)
+  question     CustomQuestion @relation(fields: [questionId], references: [id])
+
+  @@unique([examId, questionId])
+  @@index([examId])
+  @@map("custom_exam_questions")
+}
+
+// Sesion de un candidato rindiendo un examen personalizado
+model CustomExamSession {
+  id                   String               @id @default(uuid())
+  examId               String               @map("exam_id")
+  candidateId          String               @map("candidate_id")
+  status               CustomSessionStatus  @default(PENDING)
+  startedAt            DateTime?            @map("started_at")
+  finishedAt           DateTime?            @map("finished_at")
+  timeSpentSec         Int?                 @map("time_spent_sec")
+  currentQuestionIndex Int                  @default(0) @map("current_question_index")  // Indice 0-based en questionOrder
+  totalQuestions       Int                  @map("total_questions")
+  // questionOrder: array de questionIds en el orden randomizado para ESTE candidato
+  questionOrder        Json                 @map("question_order")
+  // optionOrders: { questionId: [optionId, optionId, ...] } orden randomizado de opciones
+  optionOrders         Json                 @map("option_orders")
+  // Resultados (calculados server-side)
+  rawScore             Int?                 @map("raw_score")        // Puntos obtenidos
+  maxScore             Int?                 @map("max_score")        // Puntos posibles
+  percentage           Float?               // % aciertos
+  passed               Boolean?             // ¿supero passingScore?
+  ipAddress            String?              @map("ip_address")
+  userAgent            String?              @map("user_agent")
+  createdAt            DateTime             @default(now()) @map("created_at")
+  updatedAt            DateTime             @updatedAt @map("updated_at")
+
+  exam       CustomExam         @relation(fields: [examId], references: [id])
+  candidate  User               @relation("CustomExamCandidate", fields: [candidateId], references: [id])
+  answers    CustomAnswer[]
+  alerts     ProctoringAlert[]
+
+  @@unique([examId, candidateId])
+  @@index([candidateId])
+  @@index([examId])
+  @@index([status])
+  @@index([candidateId, status])
+  @@map("custom_exam_sessions")
+}
+
+// Respuestas calificadas server-side
+model CustomAnswer {
+  id              String   @id @default(uuid())
+  sessionId       String   @map("session_id")
+  questionId      String   @map("question_id")
+  // selectedOptionIds: array de ids de opciones seleccionadas
+  // Para TRUE_FALSE: ["<option-id-verdadero-o-falso>"]
+  selectedOptionIds Json   @map("selected_option_ids")
+  isCorrect       Boolean  @map("is_correct")
+  pointsAwarded   Int      @map("points_awarded")
+  responseTimeMs  Int?     @map("response_time_ms")
+  answeredAt      DateTime @default(now()) @map("answered_at")
+
+  session         CustomExamSession @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+  question        CustomQuestion    @relation(fields: [questionId], references: [id])
+
+  @@unique([sessionId, questionId])
+  @@index([sessionId])
+  @@map("custom_answers")
 }

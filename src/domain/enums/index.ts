@@ -6,3 +6,5 @@ export { AlertType } from './alert-type.enum';
 export { ScheduledExamStatus } from './scheduled-exam-status.enum';
 export { CandidateAssignmentStatus } from './candidate-assignment-status.enum';
 export { RecordingType } from './recording-type.enum';
+export { CustomQuestionType } from './custom-question-type.enum';
+export { CustomSessionStatus } from './custom-session-status.enum';

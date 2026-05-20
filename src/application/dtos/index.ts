@@ -36,3 +36,12 @@ export {
   FilterAnswerDto,
   SubmitApplicationDto,
 } from './job-application.dto';
+export {
+  CustomQuestionOptionDto,
+  CreateCustomQuestionDto,
+  UpdateCustomQuestionDto,
+  CreateCustomExamDto,
+  UpdateCustomExamDto,
+  AssignCandidatesDto,
+  SubmitCustomAnswerDto,
+} from './custom-exam.dto';

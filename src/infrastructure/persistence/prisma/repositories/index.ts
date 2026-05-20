@@ -5,3 +5,7 @@ export { PrismaAnswerRepository } from './prisma-answer.repository';
 export { PrismaResultRepository } from './prisma-result.repository';
 export { PrismaProctoringAlertRepository } from './prisma-proctoring-alert.repository';
 export { PrismaRecordingRepository } from './prisma-recording.repository';
+export { PrismaCustomQuestionRepository } from './prisma-custom-question.repository';
+export { PrismaCustomExamRepository } from './prisma-custom-exam.repository';
+export { PrismaCustomExamSessionRepository } from './prisma-custom-exam-session.repository';
+export { PrismaCustomAnswerRepository } from './prisma-custom-answer.repository';
